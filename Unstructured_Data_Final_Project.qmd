@@ -1,0 +1,262 @@
+---
+title: "Unstructured Data Final Project"
+author: "James DiLuca"
+format: html
+---
+
+## Scraping Seinfeld Dialogue
+
+Introduction: 
+
+Seinfeld is a popular sitcom that aired from 1989 to 1998. It was created by Larry David and Jerry Seinfeld. The show is known for its humor, sarcasm, and memorable characters. I thought using analyzing dialogue from a show like Seinfeld would be a fun way implement some of the tools that we learned in class. I also wanted to try my hand at sarcasm detection because the element of sarcasm is a huge part of the humor in Seinfeld. In this project, I analyze dialogue spanning all of the nine seasons that Seinfeld was on the air. I performed sentiment analysis, topic modeling, and sarcasm detection on the text. The questions that I will be attemping to answer are: Out of the most frequently occuring characters, who has the highest/lowest average sentiment score? What are the most prevalent topics in the show and do they display any similarity? Which character is the most sarcastic?
+
+Results: 
+
+Through applying sentiment analysis, I found that the character with the highest sentiment score was Newman and the character that had the lowest was Frank Costanza. Frank Costanza is known for being a very angry and bitter character so it does make sense that he would have the lowest sentiment score. The most prevalent topics in the show had high frequency of the four main characters names, Jerry, George, Elaine, Kramer. Other underlying themes are present upon futher inspection such as travel, doctor, things relating to eyes, and housing to name a few. After performing sarcasm detection using a pre trained hugging face model I found that the character that had the highest tendency to be sarcastic was Estelle Costanza. Kramer was a close second followed by Newman and Elaine. I attempted to run a hugging face text classification model that had an irony detection component but I was unable to get it to work as tensor size errors kept popping up.
+
+Discussion: 
+
+Overall, I am satisfied with how this project came out and throughly enjoyed working on it. However, I do think that there are some parts that could be improved. I think a futher analysis that dives into specific episodes and seasons would be very interesting. Being able to see how topics change over time, how characters sentiment change over time and character sentiment or sarcasm per episode are the types of things I would want to explore. Additionally, I ran into some problems scraping. The first website that I attemped to scrape was very old. The html structure was inconsistent and I could not get my code to work properly. I then found another website called TV Quotes where I was able to get dialogue for each episode along with character specific quotes that I filtered out in case they were already present in the episode script. The code that I used to scrape the text does have a limitation in that it only scrapes the first page on the episode specific page, meaning that if the episode has one more page of dialogue it is not caputured. However, I do think I got signifigantly large sample of the dialogue. My playwright code could be fine tuned to capture more dialogue as well as assign an episode or date which would be useful for futher analysis. In cleaning my csv file I was able to complete my main objective which was getting a character column and a quote column but I believe I could have maybe assigned dates to my rows of text. I also think that the sentiment analysis I performed struggled given the nature of the shows scripting. Even with using more advanced sentiment analysis I am not sure it would have made a difference. One example of this that I found in my data was, "Did you just double dip that chip?" Usually there is a negative conatation with 'double dipping' but the sentiment score can't exactly detect that thus assigning a neutral score of 0. There are also many "Seinfeldism's" such as Festivus, which is a made up holiday, or yada yada yada which is a phrase that is used to skip over boring or unimportant details.
+
+## Playwright Code
+
+Used to scrape 180 episodes of Seinfeld dialogue from TV Quotes website. Function deploys playwright. Used a for loop to store the urls of each epidose in a list. Then I specified that the link had to have seinfeld, formed the full page url, and located text on the page with the p tag. I then stored the dialogue in a list and then converted it to a pandas dataframe and saved it as a csv file for easy access.
+
+
+```{python}
+#|eval: false
+
+from playwright.sync_api import sync_playwright
+import pandas as pd
+
+start_url = "https://tvquot.es/seinfeld/"
+
+def run (playwright):
+    browser = playwright.chromium.launch(headless=False)
+    page = browser.new_page()
+    page.goto(start_url)
+    print(page.title())
+
+    quotes_list = []
+
+
+    for quote in page.locator('li').all():
+        for link in quote.locator('a').all():
+            url = link.get_attribute('href')
+            print(url)
+
+
+
+            if url is not None and "seinfeld" in url:
+                new_page = browser.new_page()
+                new_page.goto(f"https://tvquot.es{url}")
+                scripts = new_page.locator('p').all()
+
+                for script in scripts: 
+                    data = script.text_content()                                        
+                    quotes_list.append(data.strip())
+                
+            new_page.close()        
+                    
+               
+    browser.close()
+
+    return quotes_list
+
+with sync_playwright() as playwright:
+    quotes_list = run(playwright)
+    
+    
+quotes_df = pd.DataFrame(quotes_list, columns=["Quote"])
+
+quotes_df.to_csv("seinfeld_quotes.csv", index=False)
+
+```
+
+
+## Cleaning Process
+
+```{python}
+import re   
+import pandas as pd
+
+seinfeld_data = pd.read_csv('C:/Users/james/OneDrive/Documents/Seths_Class_Repo/seinfeld_quotes.csv')
+
+seinfeld_data = seinfeld_data.drop_duplicates()
+ 
+
+```
+
+Filtering out rows that contain the word "Quote" as they are not actual dialogue and for the purposes of this project I want to focus on the dialogue.
+
+```{python}
+
+word_to_remove = 'Quote'
+
+df_filtered = seinfeld_data[~seinfeld_data.apply(lambda row: row.astype(str).str.contains(word_to_remove).any(), axis=1)]
+```
+
+Contructing the dialogue to character dataframe which where I will perform sentiment analysis, topic modeling, and sarcasm detection. I used regex to remove any text that was in brackets as most of it was not part of the dialogue. I then split the dialogue into character and quote columns on the colon that seperated the name from the dialogue. I then removed any rows that contained numbers and the last three rows that did not contain dialogue.
+
+```{python}
+
+df_filtered["Quote"] = df_filtered["Quote"].str.replace(r"\[.*?\]", "", regex=True).str.strip()
+
+def split_dialogue(text):
+    lines = text.split("\n")  
+    extracted = []
+    
+    for line in lines:
+        line = line.strip()  
+        match = re.match(r"([^:]+):\s*(.*)", line)  
+        if match:
+            extracted.append(match.groups())  
+    
+    return extracted
+
+full_clean = df_filtered['Quote'].apply(split_dialogue).explode().dropna().apply(pd.Series)
+
+full_clean.columns = ['Character', 'Quotes']
+
+full_clean = full_clean[~full_clean['Quotes'].str.match(r'^\w+[^\w\s]$')]
+
+n = 3
+full_clean.drop(full_clean.tail(n).index, inplace = True)
+
+
+full_clean = full_clean[~full_clean['Quotes'].str.contains(r'\d')]
+```
+
+## Sentiment Analysis
+
+Sentiment analysis using vader. Applied using lambda function to the Quotes column. I then found the top 10 most frequently occuring characters and filtered the dataframe to only include those characters. I then grouped by character and found the average sentiment score for each character which I then plotted on horizontal bar chart.
+
+```{python}
+import matplotlib.pyplot as plt
+import seaborn as sns
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+
+full_clean['Sentiment'] = full_clean['Quotes'].apply(lambda x: SentimentIntensityAnalyzer().polarity_scores(x)['compound'])
+
+```
+
+
+```{python}
+
+top_characters = full_clean['Character'].value_counts().head(10).index
+
+top_character_sentiment = full_clean[full_clean['Character'].isin(top_characters)]
+
+
+avg_character_sentiment = top_character_sentiment.groupby('Character')['Sentiment'].mean().sort_values(ascending=False)
+
+avg_character_sentiment = pd.DataFrame(avg_character_sentiment)
+
+avg_character_sentiment.rename(columns={'Sentiment': 'Avg. Sentiment'}, inplace=True)
+
+
+
+plt.figure(figsize=(10, 6))
+horizontal_bar_plot =sns.barplot(x='Avg. Sentiment', y='Character', data=avg_character_sentiment, palette='pastel')
+plt.title('Average Sentiment Score of Central Seinfeld Characters')
+plt.xlabel('Avg Sentiment')
+plt.ylabel('Character')
+plt.show()
+
+```
+
+Then use BERTopic modeling to find the most prevalent topics in the show. I preprocessed the text by tokenizing and lemmatizing the text with a function along with removing stopwords. I then apply the model. I then visualize the topics using an intertopic distance map, a bar chart containing distribution of words within each topic, and a similarity matrix.
+
+## Topic Modeling
+
+```{python}
+from bertopic import BERTopic
+from bertopic.vectorizers import ClassTfidfTransformer
+import nltk
+import spacy
+
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+
+nlp = spacy.load('en_core_web_lg')
+
+def preprocess_text(text):
+    doc = nlp(text.lower())
+    tokens = [token.lemma_ for token in doc if token.is_alpha and token.text not in stopwords.words('english')]
+    return ' '.join(tokens)
+
+full_clean['Processed_Quotes'] = full_clean['Quotes'].apply(preprocess_text)
+
+model = BERTopic()
+topics, probabilities = model.fit_transform(full_clean['Processed_Quotes'])
+
+topics_info = model.get_topic_info()
+print(topics_info.head())
+```
+
+
+```{python}
+model.visualize_topics()
+```
+
+```{python}
+model.visualize_barchart(top_n_topics=12)
+
+```
+
+```{python}
+model.visualize_heatmap()
+
+```
+
+## Sarcasm Detection
+
+I implemented a pre trained hugging face model to detect sarcasm. I then applied the model to the text and assigned a label and score to each quote using a function. I then filtered the dataframe to only include the top 10 most frequently occuring characters and then found the percentage of time that they would say something sarcastic. I then plotted the results on a horizontal bar chart.
+
+```{python}
+
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+
+model_name = "jkhan447/sarcasm-detection-Bert-base-uncased"
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+sarcasm_detector = pipeline("text-classification", model=model, tokenizer=tokenizer)
+
+sarcasm_detector.model.config.id2label
+
+def detect_sarcasm(text):
+    result = sarcasm_detector(text)[0]
+    return result['label'], result['score']
+
+full_clean[["Sarcasm_Label", "Sarcasm_Score"]] = full_clean["Quotes"].apply(lambda x: pd.Series(detect_sarcasm(x)))
+
+```
+
+
+```{python}
+top_full_clean = full_clean[full_clean['Character'].isin(top_characters)]
+
+
+sarcastic_counts = top_full_clean[top_full_clean['Sarcasm_Label'] == 'LABEL_1']['Character'].value_counts()
+
+
+total_counts = top_full_clean['Character'].value_counts()
+
+
+sarcastic_percentage = (sarcastic_counts / total_counts) * 100
+
+sarcastic_percentage = sarcastic_percentage.sort_values(ascending=False)
+
+
+plt.figure(figsize=(10, 6))
+plt.barh(sarcastic_percentage.index, sarcastic_percentage.values, color='gold', edgecolor='black')
+plt.xlabel('Chance of Being Sarcastic (%)')
+plt.ylabel('Character')
+plt.title('Which Character is the Most Sarcastic?')
+plt.gca().invert_yaxis()
+plt.show()
+
+```
